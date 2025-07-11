@@ -1,0 +1,78 @@
+/* Corrección para el problema del sidebar que aparece al final de la página */
+
+/* Desktop - Sidebar fijo */
+@media (min-width: 768px) {
+    .sidebar {
+        position: fixed !important;
+        top: 0;
+        left: 0;
+        height: 100vh;
+        overflow-y: auto;
+        z-index: 1000;
+    }
+    
+    .content-area {
+        margin-left: 280px; /* Ancho del sidebar */
+        min-height: 100vh;
+    }
+}
+
+/* Tablet */
+@media (min-width: 768px) and (max-width: 991.98px) {
+    .sidebar {
+        width: 250px;
+    }
+    .content-area {
+        margin-left: 250px;
+    }
+}
+
+/* Móvil - Sidebar deslizable */
+@media (max-width: 767.98px) {
+    .sidebar {
+        position: fixed !important;
+        top: 0;
+        left: -280px;
+        width: 280px;
+        height: 100vh;
+        z-index: 1050;
+        transition: left 0.3s ease;
+        overflow-y: auto;
+    }
+    
+    .sidebar.show {
+        left: 0;
+    }
+    
+    .sidebar-backdrop {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.5);
+        z-index: 1040;
+        display: none;
+    }
+    
+    .sidebar-backdrop.show {
+        display: block;
+    }
+    
+    .content-area {
+        margin-left: 0 !important;
+        width: 100% !important;
+    }
+}
+
+/* Evitar que el sidebar aparezca en el scroll */
+body {
+    overflow-x: hidden;
+}
+
+/* Asegurar que el contenido no se superponga */
+.navbar {
+    position: sticky;
+    top: 0;
+    z-index: 999;
+}
