@@ -541,11 +541,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $puedeEditar) {
     }
     
     elseif ($accion === 'eliminar_despacho' && $_SESSION['tipo_usuario'] === 'admin') {
-        // CORREGIDO: Eliminar despacho completamente (solo admin)
+        // CORREGIDO: Eliminar despacho completamente (solo admin) - ORDEN CORREGIDO
         try {
             $db->beginTransaction();
             
-            // Eliminar precios especiales
+            // 1. PRIMERO: Eliminar precios especiales (si existen)
             $stmt = $db->prepare("
                 DELETE vpe FROM ventas_precios_especiales vpe
                 JOIN despacho_ruta_detalle drd ON vpe.despacho_ruta_detalle_id = drd.id
@@ -553,15 +553,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $puedeEditar) {
             ");
             $stmt->execute([$despacho['id']]);
             
-            // Eliminar detalles
-            $stmt = $db->prepare("DELETE FROM despacho_ruta_detalle WHERE despacho_ruta_id = ?");
-            $stmt->execute([$despacho['id']]);
-            
-            // Eliminar historial
+            // 2. SEGUNDO: Eliminar historial (ANTES del despacho principal)
             $stmt = $db->prepare("DELETE FROM despachos_historial WHERE despacho_ruta_id = ?");
             $stmt->execute([$despacho['id']]);
             
-            // Eliminar despacho
+            // 3. TERCERO: Eliminar detalles del despacho
+            $stmt = $db->prepare("DELETE FROM despacho_ruta_detalle WHERE despacho_ruta_id = ?");
+            $stmt->execute([$despacho['id']]);
+            
+            // 4. FINALMENTE: Eliminar el despacho principal
             $stmt = $db->prepare("DELETE FROM despachos_ruta WHERE id = ?");
             $stmt->execute([$despacho['id']]);
             
@@ -1415,7 +1415,7 @@ if ($despacho && in_array($eventoActual, ['recarga', 'segunda_recarga', 'retorno
                         </div>
                     </div>
                     
-                <?php elseif ($eventoActual === 'crear'): ?>
+                <?php else: ?>
                     <!-- Crear nuevo despacho -->
                     <div class="card">
                         <div class="card-header bg-success text-white">
@@ -1441,7 +1441,7 @@ if ($despacho && in_array($eventoActual, ['recarga', 'segunda_recarga', 'retorno
                 <?php endif; ?>
                 
             <?php else: ?>
-                <!-- Crear nuevo despacho (sin despacho existente) -->
+                <!-- Crear nuevo despacho -->
                 <div class="card">
                     <div class="card-header bg-success text-white">
                         <h5 class="mb-0">
@@ -2277,3 +2277,529 @@ if ($despacho && in_array($eventoActual, ['recarga', 'segunda_recarga', 'retorno
                     </div>
                     
                 <?php elseif (in_array($eventoActual, ['salida', 'recarga', 'segunda_recarga', 'retorno'])): ?>
+                    <?php elseif (in_array($eventoActual, ['salida', 'recarga', 'segunda_recarga', 'retorno'])): ?>
+                    <!-- Formulario para registrar productos -->
+                    <div class="card">
+                        <div class="card-header bg-<?php echo $eventoActual === 'salida' ? 'success' : ($eventoActual === 'retorno' ? 'danger' : 'primary'); ?> text-white">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <h5 class="mb-0">
+                                    <i class="fas fa-clipboard-list me-2"></i><?php echo $tituloEvento; ?>
+                                    <?php if (!$esObligatorio): ?>
+                                        <span class="badge bg-light text-dark ms-2">Opcional</span>
+                                    <?php endif; ?>
+                                </h5>
+                                <?php if ($puedeOmitir && $puedeEditar): ?>
+                                    <form method="POST" action="" class="d-inline">
+                                        <input type="hidden" name="accion" value="omitir_recarga">
+                                        <input type="hidden" name="evento" value="<?php echo $eventoActual; ?>">
+                                        <button type="submit" class="btn btn-outline-light btn-sm" 
+                                                onclick="return confirm('¿Está seguro de omitir esta <?php echo $eventoActual; ?>?')">
+                                            <i class="fas fa-forward me-1"></i>Omitir
+                                        </button>
+                                    </form>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <?php if ($puedeEditar): ?>
+                                <!-- Buscador de productos -->
+                                <div class="search-box">
+                                    <div class="row">
+                                        <div class="col-md-6">
+                                            <label class="form-label">Buscar Producto</label>
+                                            <input type="text" class="form-control" id="buscarProducto" 
+                                                   placeholder="Buscar por nombre o medida...">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label class="form-label">Filtrar por Categoría</label>
+                                            <select class="form-select" id="filtroCategoria">
+                                                <option value="">Todas las categorías</option>
+                                                <option value="grupo_aje">Grupo AJE</option>
+                                                <option value="proveedores_varios">Proveedores Varios</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <form method="POST" action="" id="formProductos">
+                                    <input type="hidden" name="accion" value="guardar_productos">
+                                    <input type="hidden" name="evento" value="<?php echo $eventoActual; ?>">
+                                    
+                                    <div class="alert alert-info">
+                                        <i class="fas fa-info-circle me-2"></i>
+                                        <?php if ($eventoActual === 'salida'): ?>
+                                            Ingrese las cantidades de productos que <strong>SALEN</strong> en la mañana. Solo los productos con cantidad aparecerán en las recargas.
+                                        <?php elseif ($eventoActual === 'retorno'): ?>
+                                            Ingrese las cantidades de productos que <strong>REGRESAN</strong> sin vender.
+                                            <br><strong>Fórmula:</strong> VENDIDO = (SALIDA + RECARGA + 2DA RECARGA) - RETORNO
+                                        <?php else: ?>
+                                            Ingrese las cantidades de productos para <strong><?php echo strtoupper($eventoActual); ?></strong>.
+                                        <?php endif; ?>
+                                    </div>
+                                    
+                                    <!-- Lista de productos -->
+                                    <div class="row" id="productosContainer">
+                                        <?php 
+                                        // Para salida mostrar todos los productos
+                                        // Para recargas y retorno, mostrar solo los que tienen salida
+                                        $mostrarProductos = [];
+                                        if ($eventoActual === 'salida') {
+                                            $mostrarProductos = $productos;
+                                        } else {
+                                            foreach ($productos as $producto) {
+                                                if (in_array($producto['id'], $productosConSalida)) {
+                                                    $mostrarProductos[] = $producto;
+                                                }
+                                            }
+                                        }
+                                        
+                                        foreach ($mostrarProductos as $producto): ?>
+                                            <div class="col-md-6 col-lg-4 producto-item" 
+                                                 data-categoria="<?php echo $producto['categoria']; ?>"
+                                                 data-nombre="<?php echo strtolower($producto['nombre']); ?>">
+                                                <div class="producto-card producto-<?php echo $producto['categoria']; ?>">
+                                                    <div class="d-flex justify-content-between align-items-start mb-2">
+                                                        <h6 class="mb-0"><?php echo htmlspecialchars($producto['nombre']); ?></h6>
+                                                        <span class="badge bg-<?php echo $producto['categoria'] === 'grupo_aje' ? 'success' : 'primary'; ?>">
+                                                            <?php echo $producto['categoria'] === 'grupo_aje' ? 'AJE' : 'Varios'; ?>
+                                                        </span>
+                                                    </div>
+                                                    
+                                                    <div class="mb-3">
+                                                        <small class="text-muted">
+                                                            <strong>Precio:</strong> <?php echo formatearDinero($producto['precio_unitario']); ?>
+                                                            <?php if ($producto['usa_formula']): ?>
+                                                                <span class="badge bg-info">Fórmula</span>
+                                                            <?php endif; ?>
+                                                            <br><strong>Stock:</strong> <?php echo formatearNumero($producto['stock_actual']); ?>
+                                                            
+                                                            <?php if ($eventoActual !== 'salida'): ?>
+                                                                <?php
+                                                                // Mostrar cantidades anteriores
+                                                                $detalleActual = null;
+                                                                foreach ($detalles as $detalle) {
+                                                                    if ($detalle['producto_id'] == $producto['id']) {
+                                                                        $detalleActual = $detalle;
+                                                                        break;
+                                                                    }
+                                                                }
+                                                                if ($detalleActual):
+                                                                ?>
+                                                                    <br><strong>Salida:</strong> <?php echo formatearNumero($detalleActual['salida']); ?>
+                                                                    <?php if ($eventoActual !== 'recarga'): ?>
+                                                                        <strong>Recarga:</strong> <?php echo formatearNumero($detalleActual['recarga']); ?>
+                                                                    <?php endif; ?>
+                                                                    <?php if ($eventoActual === 'retorno'): ?>
+                                                                        <strong>2da Recarga:</strong> <?php echo formatearNumero($detalleActual['segunda_recarga']); ?>
+                                                                        <br><strong>Total Enviado:</strong> <?php echo formatearNumero($detalleActual['salida'] + $detalleActual['recarga'] + $detalleActual['segunda_recarga']); ?>
+                                                                    <?php endif; ?>
+                                                                <?php endif; ?>
+                                                            <?php endif; ?>
+                                                        </small>
+                                                    </div>
+                                                    
+                                                    <div class="input-group">
+                                                        <span class="input-group-text">Cantidad</span>
+                                                        <input type="number" class="form-control" 
+                                                               name="productos[<?php echo $producto['id']; ?>]"
+                                                               step="0.5" min="0" 
+                                                               placeholder="0"
+                                                               value="<?php 
+                                                               // Mostrar cantidad existente si existe
+                                                               foreach ($detalles as $detalle) {
+                                                                   if ($detalle['producto_id'] == $producto['id']) {
+                                                                       echo $detalle[$eventoActual] ?? '0';
+                                                                       break;
+                                                                   }
+                                                               }
+                                                               ?>">
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    
+                                    <!-- Sección para agregar nuevos productos (solo en recargas) -->
+                                    <?php if (in_array($eventoActual, ['recarga', 'segunda_recarga'])): ?>
+                                        <div class="nuevo-producto-section">
+                                            <h6><i class="fas fa-plus-circle me-2"></i>Agregar Productos No Llevados en Salida</h6>
+                                            <p class="text-muted mb-3">Si necesita agregar productos que no se llevaron en la salida inicial.</p>
+                                            
+                                            <div class="row">
+                                                <div class="col-md-6 mb-3">
+                                                    <input type="text" class="form-control" id="buscarNuevoProducto" 
+                                                           placeholder="Buscar producto para agregar...">
+                                                </div>
+                                                <div class="col-md-6 mb-3">
+                                                    <select class="form-select" id="filtroNuevaCategoria">
+                                                        <option value="">Todas las categorías</option>
+                                                        <option value="grupo_aje">Grupo AJE</option>
+                                                        <option value="proveedores_varios">Proveedores Varios</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="row" id="nuevosProductosContainer">
+                                                <?php 
+                                                // Mostrar productos que NO tienen salida
+                                                foreach ($productos as $producto): 
+                                                    if (!in_array($producto['id'], $productosConSalida)):
+                                                ?>
+                                                    <div class="col-md-6 col-lg-4 nuevo-producto-item" 
+                                                         data-categoria="<?php echo $producto['categoria']; ?>"
+                                                         data-nombre="<?php echo strtolower($producto['nombre']); ?>"
+                                                         style="display: none;">
+                                                        <div class="producto-card producto-<?php echo $producto['categoria']; ?>" style="opacity: 0.8;">
+                                                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                                                <h6 class="mb-0"><?php echo htmlspecialchars($producto['nombre']); ?></h6>
+                                                                <span class="badge bg-warning">Nuevo</span>
+                                                            </div>
+                                                            
+                                                            <div class="mb-3">
+                                                                <small class="text-muted">
+                                                                    <strong>Precio:</strong> <?php echo formatearDinero($producto['precio_unitario']); ?>
+                                                                    <br><strong>Stock:</strong> <?php echo formatearNumero($producto['stock_actual']); ?>
+                                                                </small>
+                                                            </div>
+                                                            
+                                                            <div class="input-group">
+                                                                <span class="input-group-text">Cantidad</span>
+                                                                <input type="number" class="form-control" 
+                                                                       name="nuevos_productos[<?php echo $producto['id']; ?>]"
+                                                                       step="0.5" min="0" 
+                                                                       placeholder="0">
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                <?php 
+                                                    endif;
+                                                endforeach; 
+                                                ?>
+                                            </div>
+                                            
+                                            <button type="button" class="btn btn-outline-warning btn-sm" onclick="mostrarNuevosProductos()">
+                                                <i class="fas fa-eye me-1"></i>Mostrar Productos Disponibles
+                                            </button>
+                                        </div>
+                                    <?php endif; ?>
+                                    
+                                    <div class="row mt-4">
+                                        <div class="col-12">
+                                            <button type="submit" class="btn btn-<?php echo $eventoActual === 'salida' ? 'success' : ($eventoActual === 'retorno' ? 'danger' : 'primary'); ?>">
+                                                <i class="fas fa-save me-2"></i>Guardar <?php echo ucfirst($eventoActual); ?>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </form>
+                            <?php else: ?>
+                                <div class="alert alert-warning">
+                                    <i class="fas fa-exclamation-triangle me-2"></i>
+                                    No se puede editar este despacho.
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    
+                <?php else: ?>
+                    <!-- Crear nuevo despacho -->
+                    <div class="card">
+                        <div class="card-header bg-success text-white">
+                            <h5 class="mb-0">
+                                <i class="fas fa-plus-circle me-2"></i>Crear Nuevo Despacho
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="alert alert-info">
+                                <i class="fas fa-info-circle me-2"></i>
+                                Se creará un nuevo despacho para la ruta <strong><?php echo htmlspecialchars($despacho['ruta_nombre'] ?? $ruta['nombre'] ?? ''); ?></strong> 
+                                en la fecha <strong><?php echo date('d/m/Y', strtotime($fecha)); ?></strong>.
+                            </div>
+                            
+                            <form method="POST" action="">
+                                <input type="hidden" name="accion" value="crear_despacho">
+                                <button type="submit" class="btn btn-success">
+                                    <i class="fas fa-plus me-2"></i>Crear Despacho
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                <?php endif; ?>
+                
+            <?php else: ?>
+                <!-- Crear nuevo despacho (sin despacho existente) -->
+                <div class="card">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0">
+                            <i class="fas fa-plus-circle me-2"></i>Crear Nuevo Despacho
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle me-2"></i>
+                            Se creará un nuevo despacho para la ruta <strong><?php echo htmlspecialchars($ruta['nombre'] ?? ''); ?></strong> 
+                            en la fecha <strong><?php echo date('d/m/Y', strtotime($fecha)); ?></strong>.
+                        </div>
+                        
+                        <form method="POST" action="">
+                            <input type="hidden" name="accion" value="crear_despacho">
+                            <button type="submit" class="btn btn-success">
+                                <i class="fas fa-plus me-2"></i>Crear Despacho
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+    
+    <!-- Modal para Vista Previa de Liquidación -->
+    <?php if (isset($mostrar_preview) && $mostrar_preview): ?>
+        <div class="preview-modal" id="previewModal">
+            <div class="preview-content">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5><i class="fas fa-eye me-2"></i>Vista Previa de Liquidación</h5>
+                    <button type="button" class="btn-close" onclick="cerrarPreview()"></button>
+                </div>
+                
+                <div class="table-responsive">
+                    <table class="table table-striped">
+                        <thead>
+                            <tr>
+                                <th>Producto</th>
+                                <th>Vendido</th>
+                                <th>Detalles de Precio</th>
+                                <th>Total $</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php 
+                            $totalGeneral = 0;
+                            foreach ($preview_data as $item): 
+                                $totalGeneral += $item['total_dinero'];
+                            ?>
+                                <tr>
+                                    <td>
+                                        <strong><?php echo htmlspecialchars($item['producto_nombre']); ?></strong>
+                                        <br><small class="text-muted"><?php echo $item['categoria'] === 'grupo_aje' ? 'Grupo AJE' : 'Proveedores Varios'; ?></small>
+                                    </td>
+                                    <td><?php echo formatearNumero($item['ventas_calculadas']); ?></td>
+                                    <td>
+                                        <?php foreach ($item['detalles_precio'] as $detalle): ?>
+                                            <div class="mb-1">
+                                                <span class="badge bg-<?php echo $detalle['tipo'] === 'especial' ? 'warning' : 'secondary'; ?>">
+                                                    <?php echo formatearNumero($detalle['cantidad']); ?> × <?php echo formatearDinero($detalle['precio']); ?> = <?php echo formatearDinero($detalle['subtotal']); ?>
+                                                    <?php echo $detalle['tipo'] === 'especial' ? ' (Especial)' : ' (Normal)'; ?>
+                                                </span>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </td>
+                                    <td><strong><?php echo formatearDinero($item['total_dinero']); ?></strong></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                        <tfoot>
+                            <tr class="table-success">
+                                <th colspan="3">TOTAL GENERAL</th>
+                                <th><?php echo formatearDinero($totalGeneral); ?></th>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+                
+                <div class="text-center">
+                    <button type="button" class="btn btn-secondary me-2" onclick="cerrarPreview()">
+                        <i class="fas fa-times me-2"></i>Cerrar Vista Previa
+                    </button>
+                    <button type="button" class="btn btn-success" onclick="confirmarLiquidacion()">
+                        <i class="fas fa-check me-2"></i>Confirmar y Liquidar
+                    </button>
+                </div>
+            </div>
+        </div>
+    <?php endif; ?>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Funcionalidad del menú móvil
+        document.addEventListener('DOMContentLoaded', function() {
+            const sidebarToggle = document.getElementById('sidebarToggle');
+            const sidebar = document.getElementById('sidebar');
+            const sidebarBackdrop = document.getElementById('sidebarBackdrop');
+            
+            sidebarToggle?.addEventListener('click', function() {
+                sidebar.classList.toggle('show');
+                sidebarBackdrop.classList.toggle('show');
+            });
+            
+            sidebarBackdrop?.addEventListener('click', function() {
+                sidebar.classList.remove('show');
+                sidebarBackdrop.classList.remove('show');
+            });
+        });
+        
+        // Buscador de productos
+        function setupProductSearch(searchId, categoryId, containerId, itemClass) {
+            const buscarInput = document.getElementById(searchId);
+            const filtroCategoria = document.getElementById(categoryId);
+            const container = document.getElementById(containerId);
+            
+            if (buscarInput && filtroCategoria && container) {
+                function filtrarProductos() {
+                    const textoBusqueda = buscarInput.value.toLowerCase();
+                    const categoriaSeleccionada = filtroCategoria.value;
+                    const productos = container.querySelectorAll('.' + itemClass);
+                    
+                    productos.forEach(producto => {
+                        const nombre = producto.dataset.nombre;
+                        const categoria = producto.dataset.categoria;
+                        
+                        const coincideTexto = nombre.includes(textoBusqueda);
+                        const coincideCategoria = !categoriaSeleccionada || categoria === categoriaSeleccionada;
+                        
+                        if (coincideTexto && coincideCategoria) {
+                            producto.style.display = 'block';
+                        } else {
+                            producto.style.display = 'none';
+                        }
+                    });
+                }
+                
+                buscarInput.addEventListener('input', filtrarProductos);
+                filtroCategoria.addEventListener('change', filtrarProductos);
+            }
+        }
+        
+        // Configurar buscadores
+        document.addEventListener('DOMContentLoaded', function() {
+            setupProductSearch('buscarProducto', 'filtroCategoria', 'productosContainer', 'producto-item');
+            setupProductSearch('buscarNuevoProducto', 'filtroNuevaCategoria', 'nuevosProductosContainer', 'nuevo-producto-item');
+        });
+        
+        // Mostrar productos nuevos
+        function mostrarNuevosProductos() {
+            const productos = document.querySelectorAll('.nuevo-producto-item');
+            productos.forEach(producto => {
+                producto.style.display = 'block';
+            });
+        }
+        
+        // CORREGIDO: Función para agregar precios especiales
+        function agregarPrecioEspecial(productoId) {
+            const container = document.getElementById('precios_especiales_' + productoId);
+            const row = document.createElement('div');
+            row.className = 'row mb-2 precio-especial-row';
+            row.innerHTML = `
+                <div class="col-4">
+                    <input type="number" class="form-control form-control-sm" 
+                           name="precios_especiales[${productoId}][cantidad][]" 
+                           placeholder="Cantidad" step="0.5" min="0" required>
+                </div>
+                <div class="col-4">
+                    <input type="number" class="form-control form-control-sm" 
+                           name="precios_especiales[${productoId}][precio][]" 
+                           placeholder="Precio" step="0.01" min="0" required>
+                </div>
+                <div class="col-4">
+                    <button type="button" class="btn btn-danger btn-sm" 
+                            onclick="this.closest('.precio-especial-row').remove()">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            `;
+            container.appendChild(row);
+        }
+        
+        // CORREGIDO: Función para eliminar despacho
+        function confirmarEliminarDespacho() {
+            if (confirm('¿Está TOTALMENTE SEGURO de eliminar este despacho?\n\nEsta acción eliminará:\n- Todos los productos registrados\n- El historial completo\n- Los precios especiales\n\nEsta acción NO SE PUEDE DESHACER.')) {
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = '';
+                form.innerHTML = '<input type="hidden" name="accion" value="eliminar_despacho">';
+                document.body.appendChild(form);
+                form.submit();
+            }
+        }
+        
+        // NUEVO: Funciones para vista previa de liquidación
+        function previsualizarLiquidacion() {
+            const form = document.getElementById('formLiquidacion');
+            if (form) {
+                // Cambiar la acción temporalmente para vista previa
+                const actionInput = document.createElement('input');
+                actionInput.type = 'hidden';
+                actionInput.name = 'accion';
+                actionInput.value = 'preview_liquidacion';
+                
+                // Remover acción anterior si existe
+                const existingAction = form.querySelector('input[name="accion"]');
+                if (existingAction) {
+                    existingAction.remove();
+                }
+                
+                form.appendChild(actionInput);
+                form.submit();
+            }
+        }
+        
+        function cerrarPreview() {
+            const modal = document.getElementById('previewModal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }
+        
+        function confirmarLiquidacion() {
+            // Reenviar el formulario con los datos para liquidar definitivamente
+            const form = document.getElementById('formLiquidacion');
+            if (form) {
+                const actionInput = form.querySelector('input[name="accion"]');
+                if (actionInput) {
+                    actionInput.value = 'liquidar_despacho';
+                }
+                form.submit();
+            }
+        }
+        
+        // Validación del formulario
+        document.addEventListener('DOMContentLoaded', function() {
+            const form = document.getElementById('formProductos');
+            if (form) {
+                form.addEventListener('submit', function(e) {
+                    const inputs = form.querySelectorAll('input[name^="productos"], input[name^="nuevos_productos"]');
+                    let hasValue = false;
+                    
+                    inputs.forEach(input => {
+                        if (parseFloat(input.value) > 0) {
+                            hasValue = true;
+                        }
+                    });
+                    
+                    const evento = form.querySelector('input[name="evento"]').value;
+                    if (evento === 'salida' && !hasValue) {
+                        e.preventDefault();
+                        alert('Debe registrar al menos un producto en la SALIDA');
+                        return false;
+                    }
+                });
+            }
+        });
+        
+        // Navegación con teclado
+        document.addEventListener('DOMContentLoaded', function() {
+            const inputs = document.querySelectorAll('input[type="number"]');
+            inputs.forEach((input, index) => {
+                input.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const nextInput = inputs[index + 1];
+                        if (nextInput) {
+                            nextInput.focus();
+                        }
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>
