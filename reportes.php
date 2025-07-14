@@ -30,7 +30,7 @@ try {
     $rutasDisponibles = [];
 }
 
-// Función para obtener datos de ventas generales
+// Función para obtener datos de ventas generales - CORREGIDA
 function obtenerVentasGenerales($db, $fechaInicio, $fechaFin, $rutaId = null) {
     $whereRuta = $rutaId ? "AND dr.ruta_id = :ruta_id" : "";
     
@@ -51,8 +51,8 @@ function obtenerVentasGenerales($db, $fechaInicio, $fechaFin, $rutaId = null) {
         WHERE dr.fecha_despacho BETWEEN :fecha_inicio AND :fecha_fin
         AND dr.estado = 'completado'
         $whereRuta
-        GROUP BY DATE(dr.fecha_despacho), dr.ruta_id, drd.producto_id
-        ORDER BY dr.fecha_despacho DESC, r.nombre, p.nombre
+        GROUP BY DATE(dr.fecha_despacho), dr.ruta_id, drd.producto_id, r.nombre, r.tipo_ruta, p.nombre, p.categoria
+        ORDER BY DATE(dr.fecha_despacho) DESC, r.nombre, p.nombre
     ";
     
     $stmt = $db->prepare($sql);
@@ -69,7 +69,7 @@ function obtenerVentasGenerales($db, $fechaInicio, $fechaFin, $rutaId = null) {
     return $stmt->fetchAll();
 }
 
-// Función para obtener resumen de retornos
+// Función para obtener resumen de retornos - CORREGIDA
 function obtenerRetornos($db, $fechaInicio, $fechaFin, $rutaId = null) {
     $whereRuta = $rutaId ? "AND dr.ruta_id = :ruta_id" : "";
     
@@ -91,8 +91,8 @@ function obtenerRetornos($db, $fechaInicio, $fechaFin, $rutaId = null) {
         WHERE dr.fecha_despacho BETWEEN :fecha_inicio AND :fecha_fin
         AND dr.estado IN ('retorno', 'completado')
         $whereRuta
-        GROUP BY DATE(dr.fecha_despacho), dr.ruta_id, drd.producto_id
-        ORDER BY dr.fecha_despacho DESC, r.nombre, p.nombre
+        GROUP BY DATE(dr.fecha_despacho), dr.ruta_id, drd.producto_id, r.nombre, r.tipo_ruta, p.nombre, p.categoria
+        ORDER BY DATE(dr.fecha_despacho) DESC, r.nombre, p.nombre
     ";
     
     $stmt = $db->prepare($sql);
@@ -109,7 +109,7 @@ function obtenerRetornos($db, $fechaInicio, $fechaFin, $rutaId = null) {
     return $stmt->fetchAll();
 }
 
-// Función para obtener resumen por rutas
+// Función para obtener resumen por rutas - CORREGIDA
 function obtenerResumenPorRutas($db, $fechaInicio, $fechaFin) {
     $sql = "
         SELECT 
@@ -118,10 +118,14 @@ function obtenerResumenPorRutas($db, $fechaInicio, $fechaFin) {
             r.tipo_ruta,
             COUNT(DISTINCT dr.id) as total_despachos,
             COUNT(DISTINCT CASE WHEN dr.estado = 'completado' THEN dr.id END) as despachos_completados,
-            SUM(drd.ventas_calculadas) as total_vendido,
-            SUM(drd.total_dinero) as total_dinero,
-            SUM(drd.retorno) as total_retorno,
-            ROUND(AVG((drd.ventas_calculadas / NULLIF(drd.salida + drd.recarga + drd.segunda_recarga, 0)) * 100), 2) as porcentaje_venta_promedio
+            COALESCE(SUM(drd.ventas_calculadas), 0) as total_vendido,
+            COALESCE(SUM(drd.total_dinero), 0) as total_dinero,
+            COALESCE(SUM(drd.retorno), 0) as total_retorno,
+            ROUND(AVG(CASE 
+                WHEN (drd.salida + drd.recarga + drd.segunda_recarga) > 0 
+                THEN (drd.ventas_calculadas / (drd.salida + drd.recarga + drd.segunda_recarga)) * 100 
+                ELSE 0 
+            END), 2) as porcentaje_venta_promedio
         FROM rutas r
         LEFT JOIN despachos_ruta dr ON r.id = dr.ruta_id 
             AND dr.fecha_despacho BETWEEN :fecha_inicio AND :fecha_fin
@@ -139,7 +143,7 @@ function obtenerResumenPorRutas($db, $fechaInicio, $fechaFin) {
     return $stmt->fetchAll();
 }
 
-// Función para obtener productos más vendidos
+// Función para obtener productos más vendidos - CORREGIDA
 function obtenerProductosMasVendidos($db, $fechaInicio, $fechaFin, $rutaId = null) {
     $whereRuta = $rutaId ? "AND dr.ruta_id = :ruta_id" : "";
     
@@ -203,7 +207,6 @@ function obtenerEstadisticasGenerales($db, $fechaInicio, $fechaFin) {
     ]);
     return $stmt->fetch();
 }
-
 // Obtener datos según el tipo de reporte seleccionado
 $datosReporte = [];
 $estadisticasGenerales = obtenerEstadisticasGenerales($db, $fechaInicio, $fechaFin);
@@ -531,7 +534,6 @@ switch ($tipoReporte) {
                     </div>
                 </form>
             </div>
-            
             <!-- Estadísticas Generales -->
             <div class="row mb-4">
                 <div class="col-lg-3 col-md-6">
@@ -860,8 +862,7 @@ switch ($tipoReporte) {
                                 </table>
                             </div>
                         <?php endif; ?>
-                        
-                    <?php else: ?>
+                        <?php else: ?>
                         <div class="text-center py-5">
                             <i class="fas fa-chart-line fa-4x text-muted mb-3"></i>
                             <h4 class="text-muted">No hay datos disponibles</h4>
