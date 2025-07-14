@@ -123,7 +123,6 @@ if ($despacho) {
         $detalles = [];
     }
 }
-
 // Procesar formulario
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $puedeEditar) {
     $accion = $_POST['accion'] ?? '';
@@ -133,7 +132,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $puedeEditar) {
         try {
             $stmt = $db->prepare("
                 INSERT INTO despachos_ruta (fecha_despacho, ruta_id, usuario_id, estado) 
-                VALUES (?, ?, ?, 'pendiente_salida')
+                VALUES (?, ?, ?, 'salida')
             ");
             
             if ($stmt->execute([$fecha, $ruta_id, $_SESSION['usuario_id']])) {
@@ -245,13 +244,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $puedeEditar) {
                 $nuevoEstado = '';
                 switch ($evento) {
                     case 'salida':
-                        $nuevoEstado = 'pendiente_recarga';
+                        $nuevoEstado = 'recarga';
                         break;
                     case 'recarga':
-                        $nuevoEstado = 'pendiente_segunda_recarga';
+                        $nuevoEstado = 'segunda_recarga';
                         break;
                     case 'segunda_recarga':
-                        $nuevoEstado = 'pendiente_retorno';
+                        $nuevoEstado = 'retorno';
                         break;
                     case 'retorno':
                         // Calcular ventas y preparar para liquidación
@@ -262,7 +261,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $puedeEditar) {
                         ");
                         $stmt->execute([$despacho['id']]);
                         
-                        $nuevoEstado = 'pendiente_liquidacion';
+                        $nuevoEstado = 'completado';
                         break;
                 }
                 
@@ -311,17 +310,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $puedeEditar) {
         }
     }
     elseif ($accion === 'omitir_recarga') {
-        // Omitir recarga (solo para rutas que no son Grupo AJE)
+        // Omitir recarga (solo para rutas Grupo AJE en recarga, y cualquier ruta en segunda_recarga)
         $evento = $_POST['evento'];
         
         try {
             $nuevoEstado = '';
             switch ($evento) {
                 case 'recarga':
-                    $nuevoEstado = 'pendiente_segunda_recarga';
+                    $nuevoEstado = 'segunda_recarga';
                     break;
                 case 'segunda_recarga':
-                    $nuevoEstado = 'pendiente_retorno';
+                    $nuevoEstado = 'retorno';
                     break;
             }
             
@@ -355,7 +354,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $puedeEditar) {
             $tipoMensaje = 'error';
         }
     }
-    
     elseif ($accion === 'preview_liquidacion') {
         // Vista previa de liquidación con precios especiales
         $precios_especiales = $_POST['precios_especiales'] ?? [];
@@ -593,7 +591,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $puedeEditar) {
     }
 }
 
-// Determinar evento actual y título
+// Determinar evento actual y título - CORREGIDO: Lógica de obligatoriedad
 $eventoActual = '';
 $tituloEvento = '';
 $esObligatorio = true;
@@ -601,31 +599,27 @@ $puedeOmitir = false;
 
 if ($despacho) {
     switch ($despacho['estado']) {
-        case 'pendiente_salida':
+        case 'salida':
             $eventoActual = 'salida';
             $tituloEvento = 'Registrar Salida de la Mañana';
             $esObligatorio = true;
             break;
-        case 'pendiente_recarga':
+        case 'recarga':
             $eventoActual = 'recarga';
             $tituloEvento = 'Registrar Primera Recarga';
-            $esObligatorio = ($despacho['tipo_ruta'] === 'grupo_aje');
-            $puedeOmitir = ($despacho['tipo_ruta'] !== 'grupo_aje');
+            // CORREGIDO: OBLIGATORIA para Proveedores Varios, OPCIONAL para Grupo AJE
+            $esObligatorio = ($despacho['tipo_ruta'] !== 'grupo_aje');
+            $puedeOmitir = ($despacho['tipo_ruta'] === 'grupo_aje');
             break;
-        case 'pendiente_segunda_recarga':
+        case 'segunda_recarga':
             $eventoActual = 'segunda_recarga';
             $tituloEvento = 'Registrar Segunda Recarga';
             $esObligatorio = false;
             $puedeOmitir = true;
             break;
-        case 'pendiente_retorno':
+        case 'retorno':
             $eventoActual = 'retorno';
             $tituloEvento = 'Registrar Retorno';
-            $esObligatorio = true;
-            break;
-        case 'pendiente_liquidacion':
-            $eventoActual = 'liquidacion';
-            $tituloEvento = 'Completar Liquidación';
             $esObligatorio = true;
             break;
         case 'completado':
@@ -943,7 +937,7 @@ if ($despacho && in_array($eventoActual, ['recarga', 'segunda_recarga', 'retorno
                     <i class="fas fa-bars"></i>
                 </button>
                 <h5 class="navbar-brand mb-0">
-                    <?php echo $despacho ? htmlspecialchars($despacho['ruta_nombre']) : htmlspecialchars($ruta['nombre']); ?>
+                    <?php echo $despacho ? htmlspecialchars($despacho['ruta_nombre']) : htmlspecialchars($ruta['nombre'] ?? ''); ?>
                     - <?php echo date('d/m/Y', strtotime($fecha)); ?>
                 </h5>
                 <div class="navbar-nav ms-auto">
@@ -967,18 +961,18 @@ if ($despacho && in_array($eventoActual, ['recarga', 'segunda_recarga', 'retorno
             
             <!-- Información de la ruta -->
             <div class="card mb-4">
-                <div class="card-header bg-<?php echo ($despacho['tipo_ruta'] ?? $ruta['tipo_ruta']) === 'grupo_aje' ? 'success' : 'primary'; ?> text-white">
+                <div class="card-header bg-<?php echo ($despacho['tipo_ruta'] ?? $ruta['tipo_ruta'] ?? '') === 'grupo_aje' ? 'success' : 'primary'; ?> text-white">
                     <div class="row align-items-center">
                         <div class="col">
                             <h5 class="mb-0">
                                 <i class="fas fa-route me-2"></i>
-                                <?php echo htmlspecialchars($despacho['ruta_nombre'] ?? $ruta['nombre']); ?>
+                                <?php echo htmlspecialchars($despacho['ruta_nombre'] ?? $ruta['nombre'] ?? ''); ?>
                             </h5>
-                            <small><?php echo htmlspecialchars($despacho['direccion'] ?? $ruta['direccion']); ?></small>
+                            <small><?php echo htmlspecialchars($despacho['direccion'] ?? $ruta['direccion'] ?? ''); ?></small>
                         </div>
                         <div class="col-auto">
                             <span class="badge bg-light text-dark">
-                                <?php echo ($despacho['tipo_ruta'] ?? $ruta['tipo_ruta']) === 'grupo_aje' ? 'Solo Grupo AJE' : 'Todos los productos'; ?>
+                                <?php echo ($despacho['tipo_ruta'] ?? $ruta['tipo_ruta'] ?? '') === 'grupo_aje' ? 'Solo Grupo AJE' : 'Todos los productos'; ?>
                             </span>
                         </div>
                     </div>
@@ -988,27 +982,28 @@ if ($despacho && in_array($eventoActual, ['recarga', 'segunda_recarga', 'retorno
             <?php if ($despacho): ?>
                 <!-- Progress Steps -->
                 <div class="progress-steps">
-                    <div class="progress-step <?php echo in_array($despacho['estado'], ['pendiente_recarga', 'pendiente_segunda_recarga', 'pendiente_retorno', 'pendiente_liquidacion', 'completado']) ? 'completed' : 'active'; ?>">
+                    <div class="progress-step <?php echo in_array($despacho['estado'], ['recarga', 'segunda_recarga', 'retorno', 'completado']) ? 'completed' : 'active'; ?>">
                         <div class="step-circle">1</div>
                         <small>Salida</small>
                     </div>
-                    <div class="progress-step <?php echo in_array($despacho['estado'], ['pendiente_segunda_recarga', 'pendiente_retorno', 'pendiente_liquidacion', 'completado']) ? 'completed' : ($despacho['estado'] === 'pendiente_recarga' ? 'active' : ''); ?>">
+                    <div class="progress-step <?php echo in_array($despacho['estado'], ['segunda_recarga', 'retorno', 'completado']) ? 'completed' : ($despacho['estado'] === 'recarga' ? 'active' : ''); ?>">
                         <div class="step-circle">2</div>
                         <small>1ra Recarga</small>
                     </div>
-                    <div class="progress-step <?php echo in_array($despacho['estado'], ['pendiente_retorno', 'pendiente_liquidacion', 'completado']) ? 'completed' : ($despacho['estado'] === 'pendiente_segunda_recarga' ? 'active' : ''); ?>">
+                    <div class="progress-step <?php echo in_array($despacho['estado'], ['retorno', 'completado']) ? 'completed' : ($despacho['estado'] === 'segunda_recarga' ? 'active' : ''); ?>">
                         <div class="step-circle">3</div>
                         <small>2da Recarga</small>
                     </div>
-                    <div class="progress-step <?php echo in_array($despacho['estado'], ['pendiente_liquidacion', 'completado']) ? 'completed' : ($despacho['estado'] === 'pendiente_retorno' ? 'active' : ''); ?>">
+                    <div class="progress-step <?php echo $despacho['estado'] === 'completado' ? 'completed' : ($despacho['estado'] === 'retorno' ? 'active' : ''); ?>">
                         <div class="step-circle">4</div>
                         <small>Retorno</small>
                     </div>
-                    <div class="progress-step <?php echo $despacho['estado'] === 'completado' ? 'completed' : ($despacho['estado'] === 'pendiente_liquidacion' ? 'active' : ''); ?>">
+                    <div class="progress-step <?php echo $despacho['estado'] === 'completado' ? 'completed' : ''; ?>">
                         <div class="step-circle">5</div>
-                        <small>Liquidación</small>
+                        <small>Completado</small>
                     </div>
                 </div>
+                
                 <!-- Contenido principal según el estado -->
                 <?php if ($eventoActual === 'completado'): ?>
                     <!-- Despacho completado - mostrar resumen -->
@@ -1021,7 +1016,7 @@ if ($despacho && in_array($eventoActual, ['recarga', 'segunda_recarga', 'retorno
                         <div class="card-body">
                             <div class="alert alert-success">
                                 <i class="fas fa-check-circle me-2"></i>
-                                Este despacho ha sido completado y liquidado exitosamente.
+                                Este despacho ha sido completado exitosamente.
                             </div>
                             
                             <?php if (!empty($detalles)): ?>
@@ -1073,156 +1068,6 @@ if ($despacho && in_array($eventoActual, ['recarga', 'segunda_recarga', 'retorno
                                         </tfoot>
                                     </table>
                                 </div>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                    
-                <?php elseif ($eventoActual === 'liquidacion'): ?>
-                    <!-- Formulario de liquidación -->
-                    <div class="card">
-                        <div class="card-header bg-warning text-dark">
-                            <h5 class="mb-0">
-                                <i class="fas fa-calculator me-2"></i>Liquidación del Despacho
-                            </h5>
-                        </div>
-                        <div class="card-body">
-                            <div class="alert alert-info">
-                                <i class="fas fa-info-circle me-2"></i>
-                                Revise las ventas calculadas y ajuste precios especiales si es necesario.
-                            </div>
-                            
-                            <!-- Vista previa si existe -->
-                            <?php if (isset($mostrar_preview) && $mostrar_preview): ?>
-                                <div class="alert alert-warning">
-                                    <h6><i class="fas fa-eye me-2"></i>Vista Previa de Liquidación</h6>
-                                    <div class="table-responsive">
-                                        <table class="table table-sm">
-                                            <thead>
-                                                <tr>
-                                                    <th>Producto</th>
-                                                    <th>Vendido</th>
-                                                    <th>Detalles de Precio</th>
-                                                    <th>Total</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                <?php 
-                                                $totalPreview = 0;
-                                                foreach ($preview_data as $item): 
-                                                    $totalPreview += $item['total_dinero'];
-                                                ?>
-                                                    <tr>
-                                                        <td><?php echo htmlspecialchars($item['producto_nombre']); ?></td>
-                                                        <td><?php echo formatearNumero($item['ventas_calculadas']); ?></td>
-                                                        <td>
-                                                            <?php foreach ($item['detalles_precio'] as $detalle_precio): ?>
-                                                                <small class="d-block">
-                                                                    <?php echo formatearNumero($detalle_precio['cantidad']); ?> × 
-                                                                    <?php echo formatearDinero($detalle_precio['precio']); ?> 
-                                                                    (<?php echo $detalle_precio['tipo'] === 'especial' ? 'Especial' : 'Normal'; ?>) = 
-                                                                    <?php echo formatearDinero($detalle_precio['subtotal']); ?>
-                                                                </small>
-                                                            <?php endforeach; ?>
-                                                        </td>
-                                                        <td><strong><?php echo formatearDinero($item['total_dinero']); ?></strong></td>
-                                                    </tr>
-                                                <?php endforeach; ?>
-                                            </tbody>
-                                            <tfoot>
-                                                <tr class="table-info">
-                                                    <th colspan="3">TOTAL GENERAL</th>
-                                                    <th><?php echo formatearDinero($totalPreview); ?></th>
-                                                </tr>
-                                            </tfoot>
-                                        </table>
-                                    </div>
-                                    
-                                    <form method="POST" action="" class="mt-3">
-                                        <input type="hidden" name="accion" value="liquidar_despacho">
-                                        <?php foreach ($preview_precios_especiales as $producto_id => $precios_data): ?>
-                                            <?php foreach ($precios_data['cantidad'] as $index => $cantidad): ?>
-                                                <input type="hidden" name="precios_especiales[<?php echo $producto_id; ?>][cantidad][]" value="<?php echo $cantidad; ?>">
-                                                <input type="hidden" name="precios_especiales[<?php echo $producto_id; ?>][precio][]" value="<?php echo $precios_data['precio'][$index]; ?>">
-                                            <?php endforeach; ?>
-                                        <?php endforeach; ?>
-                                        
-                                        <button type="submit" class="btn btn-success me-2" 
-                                                onclick="return confirm('¿Confirma la liquidación con estos valores?')">
-                                            <i class="fas fa-check me-2"></i>Confirmar Liquidación
-                                        </button>
-                                        <button type="button" class="btn btn-secondary" onclick="location.reload()">
-                                            <i class="fas fa-times me-2"></i>Cancelar
-                                        </button>
-                                    </form>
-                                </div>
-                            <?php else: ?>
-                                <!-- Formulario normal de liquidación -->
-                                <form method="POST" action="">
-                                    <input type="hidden" name="accion" value="preview_liquidacion">
-                                    
-                                    <?php if (!empty($detalles)): ?>
-                                        <div class="table-responsive">
-                                            <table class="table table-striped">
-                                                <thead>
-                                                    <tr>
-                                                        <th>Producto</th>
-                                                        <th>Enviado Total</th>
-                                                        <th>Retorno</th>
-                                                        <th>Vendido</th>
-                                                        <th>Precio Especial</th>
-                                                        <th>Total Estimado</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    <?php foreach ($detalles as $detalle): ?>
-                                                        <tr class="producto-<?php echo $detalle['categoria']; ?>">
-                                                            <td>
-                                                                <strong><?php echo htmlspecialchars($detalle['producto_nombre']); ?></strong>
-                                                                <br><small class="text-muted">
-                                                                    <?php echo $detalle['categoria'] === 'grupo_aje' ? 'Grupo AJE' : 'Proveedores Varios'; ?>
-                                                                    | Precio: <?php echo formatearDinero($detalle['precio_unitario']); ?>
-                                                                    <?php if ($detalle['usa_formula']): ?>
-                                                                        <span class="badge bg-info">Fórmula</span>
-                                                                    <?php endif; ?>
-                                                                </small>
-                                                            </td>
-                                                            <td><?php echo formatearNumero($detalle['salida'] + $detalle['recarga'] + $detalle['segunda_recarga']); ?></td>
-                                                            <td><?php echo formatearNumero($detalle['retorno']); ?></td>
-                                                            <td><strong><?php echo formatearNumero($detalle['ventas_calculadas']); ?></strong></td>
-                                                            <td>
-                                                                <div id="precios_especiales_<?php echo $detalle['producto_id']; ?>">
-                                                                    <button type="button" class="btn btn-sm btn-outline-secondary" 
-                                                                            onclick="agregarPrecioEspecial(<?php echo $detalle['producto_id']; ?>)">
-                                                                        <i class="fas fa-plus me-1"></i>Precio Especial
-                                                                    </button>
-                                                                </div>
-                                                            </td>
-                                                            <td>
-                                                                <strong>
-                                                                    <?php 
-                                                                    if ($detalle['usa_formula']) {
-                                                                        echo formatearDinero(calcularVentaFormula($detalle['ventas_calculadas']));
-                                                                    } else {
-                                                                        echo formatearDinero(calcularVentaNormal($detalle['ventas_calculadas'], $detalle['precio_unitario']));
-                                                                    }
-                                                                    ?>
-                                                                </strong>
-                                                            </td>
-                                                        </tr>
-                                                    <?php endforeach; ?>
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                        
-                                        <div class="row mt-4">
-                                            <div class="col-md-6">
-                                                <button type="submit" class="btn btn-warning">
-                                                    <i class="fas fa-eye me-2"></i>Vista Previa
-                                                </button>
-                                            </div>
-                                        </div>
-                                    <?php endif; ?>
-                                </form>
                             <?php endif; ?>
                         </div>
                     </div>
@@ -1293,10 +1138,6 @@ if ($despacho && in_array($eventoActual, ['recarga', 'segunda_recarga', 'retorno
                                         // Para salida mostrar todos los productos
                                         // Para recargas y retorno, mostrar solo los que tienen salida
                                         $mostrarProductos = [];
-                                        if ($eventoActual === 'salida') {
-                                            $mostrarProductos = $productos;
-                                        } else {
-                                            foreach ($productos as $producto) {
                                         if ($eventoActual === 'salida') {
                                             $mostrarProductos = $productos;
                                         } else {
@@ -1465,7 +1306,7 @@ if ($despacho && in_array($eventoActual, ['recarga', 'segunda_recarga', 'retorno
                         <div class="card-body">
                             <div class="alert alert-info">
                                 <i class="fas fa-info-circle me-2"></i>
-                                Se creará un nuevo despacho para la ruta <strong><?php echo htmlspecialchars($ruta['nombre']); ?></strong> 
+                                Se creará un nuevo despacho para la ruta <strong><?php echo htmlspecialchars($despacho['ruta_nombre'] ?? $ruta['nombre'] ?? ''); ?></strong> 
                                 en la fecha <strong><?php echo date('d/m/Y', strtotime($fecha)); ?></strong>.
                             </div>
                             
@@ -1490,7 +1331,7 @@ if ($despacho && in_array($eventoActual, ['recarga', 'segunda_recarga', 'retorno
                     <div class="card-body">
                         <div class="alert alert-info">
                             <i class="fas fa-info-circle me-2"></i>
-                            Se creará un nuevo despacho para la ruta <strong><?php echo htmlspecialchars($ruta['nombre']); ?></strong> 
+                            Se creará un nuevo despacho para la ruta <strong><?php echo htmlspecialchars($ruta['nombre'] ?? ''); ?></strong> 
                             en la fecha <strong><?php echo date('d/m/Y', strtotime($fecha)); ?></strong>.
                         </div>
                         
